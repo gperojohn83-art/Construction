@@ -248,7 +248,7 @@ enum PaymentType {
 }
 
 model Subcontract {
-  id           String            @id @default(cuid())
+  id           String           @id @default(cuid())
   projectId    String
   company      String
   contactName  String?
@@ -293,7 +293,7 @@ enum ChangeStatus {
 }
 
 // ─────────────────────────────────────────
-// INVOICES (τιμολόγια)
+// INVOICES (τιμολόσγια)
 // ─────────────────────────────────────────
 model Invoice {
   id             String        @id @default(cuid())
@@ -325,6 +325,13 @@ enum InvoiceStatus {
   PAID
   OVERDUE
   CANCELLED
+}
+
+enum OfferStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  EXPIRED
 }
 
 // ─────────────────────────────────────────
@@ -382,7 +389,7 @@ model Photo {
 }
 
 // ─────────────────────────────────────────
-// OFFERS (Προσφορές)
+// OFFERS (Προσφοράς)
 // ─────────────────────────────────────────
 model Offer {
   id          String      @id @default(cuid())
@@ -430,7 +437,7 @@ model Log {
 model Message {
   id         String   @id @default(cuid())
   senderId   String
-  receiverId String
+  receiverId Serving
   subject    String
   body       String   @db.Text
   isRead     Boolean  @default(false)
