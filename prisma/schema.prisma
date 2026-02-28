@@ -1,0 +1,453 @@
+// BuildFlow — Prisma Schema
+// Multi-tenant Construction Management SaaS
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────
+// MULTI-TENANCY: Organization (= εταιρεία)
+// ─────────────────────────────────────────
+model Organization {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  logo        String?
+  plan        Plan     @default(FREE)
+  stripeCustomerId     String?  @unique
+  stripeSubscriptionId String?  @unique
+  planExpiresAt        DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users       OrganizationUser[]
+  projects    Project[]
+  invoices    Invoice[]
+}
+
+enum Plan {
+  FREE       // έως 2 projects, 3 users
+  PRO        // έως 10 projects, unlimited users
+  ENTERPRISE // unlimited
+}
+
+// ─────────────────────────────────────────
+// USERS & AUTH
+// ─────────────────────────────────────────
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  password      String?
+  image         String?
+  locale        String    @default("el") // "el" | "en"
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  organizations OrganizationUser[]
+  accounts      Account[]
+  sessions      Session[]
+  messages      Message[]         @relation("SentMessages")
+  notifications Notification[]
+}
+
+model OrganizationUser {
+  id             String       @id @default(cuid())
+  organizationId String
+  userId         String
+  role           Role         @default(VIEWER)
+  joinedAt       DateTime     @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectUsers   ProjectUser[]
+
+  @@unique([organizationId, userId])
+}
+
+enum Role {
+  ADMIN          // Διαχειριστής - πλήρης πρόσβαση
+  PROJECT_MANAGER // Υπεύθυνος Έργου
+  SUPERVISOR     // Επιβλέπων
+  SUBCONTRACTOR  // Υπεργολάβος - περιορισμένη
+  VIEWER         // Μόνο ανάγνωση
+}
+
+// NextAuth required models
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+  @@unique([identifier, token])
+}
+
+// ─────────────────────────────────────────
+// PROJECTS
+// ─────────────────────────────────────────
+model Project {
+  id             String        @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?       @db.Text
+  client         String?
+  address        String?
+  lat            Float?
+  lng            Float?
+  status         ProjectStatus @default(ACTIVE)
+  startDate      DateTime?
+  endDate        DateTime?
+  budget         Decimal?      @db.Decimal(12, 2)
+  color          String        @default("#3d7fff")
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  users          ProjectUser[]
+  tasks          Task[]
+  orders         Order[]
+  payments       Payment[]
+  subcontracts   Subcontract[]
+  changes        Change[]
+  logs           Log[]
+  documents      Document[]
+  galleries      Gallery[]
+  invoices       Invoice[]
+  offers         Offer[]
+}
+
+enum ProjectStatus {
+  ACTIVE
+  COMPLETED
+  ON_HOLD
+  DELAYED
+  CANCELLED
+}
+
+model ProjectUser {
+  id               String           @id @default(cuid())
+  projectId        String
+  orgUserId        String
+  projectRole      ProjectRole      @default(MEMBER)
+  assignedAt       DateTime         @default(now())
+
+  project          Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  orgUser          OrganizationUser @relation(fields: [orgUserId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, orgUserId])
+}
+
+enum ProjectRole {
+  MANAGER
+  MEMBER
+  READONLY
+}
+
+// ─────────────────────────────────────────
+// TASKS (Gantt)
+// ─────────────────────────────────────────
+model Task {
+  id          String     @id @default(cuid())
+  projectId   String
+  parentId    String?
+  title       String
+  description String?    @db.Text
+  startDate   DateTime
+  endDate     DateTime
+  progress    Int        @default(0) // 0-100
+  color       String?
+  type        TaskType   @default(TASK)
+  order       Int        @default(0)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  project     Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parent      Task?      @relation("TaskChildren", fields: [parentId], references: [id])
+  children    Task[]     @relation("TaskChildren")
+}
+
+enum TaskType {
+  TASK
+  MILESTONE
+  PROJECT
+}
+
+// ─────────────────────────────────────────
+// FINANCIALS
+// ─────────────────────────────────────────
+model Order {
+  id          String      @id @default(cuid())
+  projectId   String
+  title       String
+  description String?     @db.Text
+  supplier    String?
+  amount      Decimal     @db.Decimal(12, 2)
+  status      OrderStatus @default(PENDING)
+  orderedAt   DateTime?
+  deliveredAt DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  project     Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+enum OrderStatus {
+  PENDING
+  ORDERED
+  DELIVERED
+  CANCELLED
+}
+
+model Payment {
+  id          String        @id @default(cuid())
+  projectId   String
+  title       String
+  amount      Decimal       @db.Decimal(12, 2)
+  type        PaymentType   @default(RECEIVED)
+  paidAt      DateTime?
+  notes       String?       @db.Text
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  project     Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+enum PaymentType {
+  RECEIVED    // Εισπράξεις
+  EXPENSE     // Δαπάνες
+}
+
+model Subcontract {
+  id           String            @id @default(cuid())
+  projectId    String
+  company      String
+  contactName  String?
+  contactPhone String?
+  contactEmail String?
+  description  String?           @db.Text
+  amount       Decimal           @db.Decimal(12, 2)
+  status       SubcontractStatus @default(ACTIVE)
+  startDate    DateTime?
+  endDate      DateTime?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  project      Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+enum SubcontractStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+model Change {
+  id          String       @id @default(cuid())
+  projectId   String
+  title       String
+  description String?      @db.Text
+  amount      Decimal?     @db.Decimal(12, 2)
+  status      ChangeStatus @default(PENDING)
+  requestedAt DateTime     @default(now())
+  approvedAt  DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+enum ChangeStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// ─────────────────────────────────────────
+// INVOICES (τιμολόγια)
+// ─────────────────────────────────────────
+model Invoice {
+  id             String        @id @default(cuid())
+  organizationId String
+  projectId      String?
+  number         String
+  client         String
+  clientAddress  String?
+  clientVat      String?
+  issueDate      DateTime
+  dueDate        DateTime?
+  items          Json          // InvoiceItem[]
+  subtotal       Decimal       @db.Decimal(12, 2)
+  vatRate        Int           @default(24)
+  vatAmount      Decimal       @db.Decimal(12, 2)
+  total          Decimal       @db.Decimal(12, 2)
+  status         InvoiceStatus @default(DRAFT)
+  notes          String?       @db.Text
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project        Project?      @relation(fields: [projectId], references: [id])
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+// ─────────────────────────────────────────
+// DOCUMENTS & FILES
+// ─────────────────────────────────────────
+model Document {
+  id          String   @id @default(cuid())
+  projectId   String
+  folderId    String?
+  name        String
+  description String?
+  fileUrl     String
+  fileKey     String
+  fileSize    Int
+  mimeType    String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project     Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  folder      DocumentFolder? @relation(fields: [folderId], references: [id])
+}
+
+model DocumentFolder {
+  id        String     @id @default(cuid())
+  projectId String
+  name      String
+  parentId  String?
+  createdAt DateTime   @default(now())
+
+  documents Document[]
+  parent    DocumentFolder?  @relation("FolderChildren", fields: [parentId], references: [id])
+  children  DocumentFolder[] @relation("FolderChildren")
+}
+
+model Gallery {
+  id        String   @id @default(cuid())
+  projectId String
+  name      String
+  createdAt DateTime @default(now())
+
+  photos    Photo[]
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model Photo {
+  id        String   @id @default(cuid())
+  galleryId String
+  url       String
+  thumbUrl  String?
+  caption   String?
+  fileKey   String
+  createdAt DateTime @default(now())
+
+  gallery   Gallery  @relation(fields: [galleryId], references: [id], onDelete: Cascade)
+}
+
+// ─────────────────────────────────────────
+// OFFERS (Προσφορές)
+// ─────────────────────────────────────────
+model Offer {
+  id          String      @id @default(cuid())
+  projectId   String
+  title       String
+  description String?     @db.Text
+  amount      Decimal     @db.Decimal(12, 2)
+  status      OfferStatus @default(PENDING)
+  validUntil  DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  project     Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  bids        OfferBid[]
+}
+
+model OfferBid {
+  id        String   @id @default(cuid())
+  offerId   String
+  company   String
+  amount    Decimal  @db.Decimal(12, 2)
+  notes     String?  @db.Text
+  selected  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  offer     Offer    @relation(fields: [offerId], references: [id], onDelete: Cascade)
+}
+
+// ─────────────────────────────────────────
+// LOGS & MESSAGES
+// ─────────────────────────────────────────
+model Log {
+  id        String   @id @default(cuid())
+  projectId String
+  title     String
+  body      String?  @db.Text
+  weather   String?
+  workers   Int?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model Message {
+  id         String   @id @default(cuid())
+  senderId   String
+  receiverId String
+  subject    String
+  body       String   @db.Text
+  isRead     Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  sender     User     @relation("SentMessages", fields: [senderId], references: [id])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  body      String
+  type      String   @default("info")
+  isRead    Boolean  @default(false)
+  link      String?
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
